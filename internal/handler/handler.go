@@ -2,14 +2,14 @@ package handler
 
 import (
 	"encoding/json"
-	"net"
+	"html"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/gorilla/mux"
 
-	"phpservermanager/internal/app"
+	"frankenphp-manager/internal/app"
+	"frankenphp-manager/internal/server"
 )
 
 // Handler struct
@@ -20,6 +20,13 @@ type Handler struct {
 // NewHandler creates a new Handler
 func NewHandler(a *app.App) *Handler {
 	return &Handler{App: a}
+}
+
+// jsonError sends a JSON error response
+func jsonError(w http.ResponseWriter, message string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 // HandleGetServers handles the GET /api/servers endpoint
@@ -40,27 +47,51 @@ func (h *Handler) HandleCreateServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&serverData); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	if serverData.Name == "" || serverData.Port == "" || serverData.Directory == "" {
-		http.Error(w, "Name, port, and directory are required", http.StatusBadRequest)
+		jsonError(w, "Name, port, and directory are required", http.StatusBadRequest)
 		return
 	}
 
+	// Sanitize name (prevent XSS)
+	serverData.Name = html.EscapeString(serverData.Name)
+
+	// Validate port range
 	if _, err := strconv.Atoi(serverData.Port); err != nil {
-		http.Error(w, "Port must be a number", http.StatusBadRequest)
+		jsonError(w, "Port must be a number", http.StatusBadRequest)
 		return
 	}
-
-	if serverData.Host != "" && !validateHost(serverData.Host) {
-		http.Error(w, "Invalid host format", http.StatusBadRequest)
+	if sanitized, err := server.SanitizePort(serverData.Port); err != nil {
+		jsonError(w, "Invalid port: "+err.Error(), http.StatusBadRequest)
 		return
+	} else {
+		serverData.Port = sanitized
+	}
+
+	// Validate host
+	if serverData.Host != "" {
+		if sanitized, err := server.SanitizeHost(serverData.Host); err != nil {
+			jsonError(w, "Invalid host: "+err.Error(), http.StatusBadRequest)
+			return
+		} else {
+			serverData.Host = sanitized
+		}
+	}
+
+	// Validate directory (prevent path traversal)
+	if sanitized, err := server.SanitizeDirectory(serverData.Directory); err != nil {
+		jsonError(w, "Invalid directory: "+err.Error(), http.StatusBadRequest)
+		return
+	} else {
+		serverData.Directory = sanitized
 	}
 
 	id := h.App.CreateServer(serverData.Name, serverData.Host, serverData.Port, serverData.Directory, serverData.Command)
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"id": id})
 }
 
@@ -78,28 +109,51 @@ func (h *Handler) HandleUpdateServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&serverData); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	if serverData.Name == "" || serverData.Port == "" || serverData.Directory == "" {
-		http.Error(w, "Name, port, and directory are required", http.StatusBadRequest)
+		jsonError(w, "Name, port, and directory are required", http.StatusBadRequest)
 		return
 	}
 
+	// Sanitize name (prevent XSS)
+	serverData.Name = html.EscapeString(serverData.Name)
+
+	// Validate port
 	if _, err := strconv.Atoi(serverData.Port); err != nil {
-		http.Error(w, "Port must be a number", http.StatusBadRequest)
+		jsonError(w, "Port must be a number", http.StatusBadRequest)
 		return
 	}
-
-	if serverData.Host != "" && !validateHost(serverData.Host) {
-		http.Error(w, "Invalid host format", http.StatusBadRequest)
+	if sanitized, err := server.SanitizePort(serverData.Port); err != nil {
+		jsonError(w, "Invalid port: "+err.Error(), http.StatusBadRequest)
 		return
+	} else {
+		serverData.Port = sanitized
+	}
+
+	// Validate host
+	if serverData.Host != "" {
+		if sanitized, err := server.SanitizeHost(serverData.Host); err != nil {
+			jsonError(w, "Invalid host: "+err.Error(), http.StatusBadRequest)
+			return
+		} else {
+			serverData.Host = sanitized
+		}
+	}
+
+	// Validate directory
+	if sanitized, err := server.SanitizeDirectory(serverData.Directory); err != nil {
+		jsonError(w, "Invalid directory: "+err.Error(), http.StatusBadRequest)
+		return
+	} else {
+		serverData.Directory = sanitized
 	}
 
 	success := h.App.UpdateServer(id, serverData.Name, serverData.Host, serverData.Port, serverData.Directory, serverData.Command)
 	if !success {
-		http.Error(w, "Server not found", http.StatusNotFound)
+		jsonError(w, "Server not found", http.StatusNotFound)
 		return
 	}
 
@@ -113,7 +167,7 @@ func (h *Handler) HandleDeleteServer(w http.ResponseWriter, r *http.Request) {
 
 	success := h.App.DeleteServer(id)
 	if !success {
-		http.Error(w, "Server not found", http.StatusNotFound)
+		jsonError(w, "Server not found", http.StatusNotFound)
 		return
 	}
 
@@ -127,7 +181,7 @@ func (h *Handler) HandleStartServer(w http.ResponseWriter, r *http.Request) {
 
 	success := h.App.StartServer(id)
 	if !success {
-		http.Error(w, "Failed to start server or server is already running", http.StatusBadRequest)
+		jsonError(w, "Failed to start server or server is already running", http.StatusBadRequest)
 		return
 	}
 
@@ -141,7 +195,7 @@ func (h *Handler) HandleStopServer(w http.ResponseWriter, r *http.Request) {
 
 	success := h.App.StopServer(id)
 	if !success {
-		http.Error(w, "Failed to stop server or server is already stopped", http.StatusBadRequest)
+		jsonError(w, "Failed to stop server or server is already stopped", http.StatusBadRequest)
 		return
 	}
 
@@ -155,7 +209,7 @@ func (h *Handler) HandleServerStatus(w http.ResponseWriter, r *http.Request) {
 
 	exists, running := h.App.GetServerStatus(id)
 	if !exists {
-		http.Error(w, "Server not found", http.StatusNotFound)
+		jsonError(w, "Server not found", http.StatusNotFound)
 		return
 	}
 
@@ -165,41 +219,55 @@ func (h *Handler) HandleServerStatus(w http.ResponseWriter, r *http.Request) {
 
 // HandleGetServerSettings handles the GET /api/settings endpoint
 func (h *Handler) HandleGetServerSettings(w http.ResponseWriter, r *http.Request) {
-	host, port := h.App.GetServerSettings()
+	settings := h.App.GetServerSettings()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"host": host,
-		"port": port,
-	})
+	json.NewEncoder(w).Encode(settings)
 }
 
 // HandleUpdateServerSettings handles the PUT /api/settings endpoint
 func (h *Handler) HandleUpdateServerSettings(w http.ResponseWriter, r *http.Request) {
 	var settingsData struct {
-		Host string `json:"host"`
-		Port string `json:"port"`
+		Host     string `json:"host"`
+		HostIPv4 string `json:"host_ipv4"`
+		HostIPv6 string `json:"host_ipv6"`
+		Port     string `json:"port"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&settingsData); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	if settingsData.Port != "" {
 		if _, err := strconv.Atoi(settingsData.Port); err != nil {
-			http.Error(w, "Port must be a number", http.StatusBadRequest)
+			jsonError(w, "Port must be a number", http.StatusBadRequest)
 			return
+		}
+		if sanitized, err := server.SanitizePort(settingsData.Port); err != nil {
+			jsonError(w, "Invalid port: "+err.Error(), http.StatusBadRequest)
+			return
+		} else {
+			settingsData.Port = sanitized
 		}
 	}
 
-	if settingsData.Host != "" && !validateHost(settingsData.Host) {
-		http.Error(w, "Invalid host format", http.StatusBadRequest)
-		return
+	// Validate each host field
+	for _, h := range []struct{ name, value string }{
+		{"host", settingsData.Host},
+		{"host_ipv4", settingsData.HostIPv4},
+		{"host_ipv6", settingsData.HostIPv6},
+	} {
+		if h.value != "" {
+			if _, err := server.SanitizeHost(h.value); err != nil {
+				jsonError(w, "Invalid "+h.name+": "+err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 	}
 
-	success := h.App.UpdateServerSettings(settingsData.Host, settingsData.Port)
+	success := h.App.UpdateServerSettings(settingsData.Host, settingsData.HostIPv4, settingsData.HostIPv6, settingsData.Port)
 	if !success {
-		http.Error(w, "Failed to update server settings", http.StatusInternalServerError)
+		jsonError(w, "Failed to update server settings", http.StatusInternalServerError)
 		return
 	}
 
@@ -215,94 +283,30 @@ func (h *Handler) HandleUpdateAuth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&authData); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	if authData.Username == "" || authData.Password == "" {
-		http.Error(w, "Username and password are required", http.StatusBadRequest)
+		jsonError(w, "Username and password are required", http.StatusBadRequest)
+		return
+	}
+
+	if len(authData.Username) > 64 {
+		jsonError(w, "Username too long (max 64 characters)", http.StatusBadRequest)
+		return
+	}
+
+	if len(authData.Password) < 8 {
+		jsonError(w, "Password must be at least 8 characters", http.StatusBadRequest)
 		return
 	}
 
 	if err := h.App.UpdateAuth(authData.Username, authData.Password); err != nil {
-		http.Error(w, "Failed to update auth settings", http.StatusInternalServerError)
+		jsonError(w, "Failed to update auth settings", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": "Auth settings updated successfully."})
-}
-
-// HandleGetACMEStatus handles the GET /api/acme/status endpoint
-// func (h *Handler) HandleGetACMEStatus(w http.ResponseWriter, r *http.Request) {
-// 	status, err := h.App.GetACMEStatus()
-// 	if err != nil {
-// 		http.Error(w, err.Error(), http.StatusInternalServerError)
-// 		return
-// 	}
-// 	w.Header().Set("Content-Type", "application/json")
-// 	json.NewEncoder(w).Encode(map[string]bool{"enabled": status})
-// }
-
-// HandleUpdateACMESettings handles the PUT /api/acme/settings endpoint
-// func (h *Handler) HandleUpdateACMESettings(w http.ResponseWriter, r *http.Request) {
-// 	var acmeData struct {
-// 		Enabled bool     `json:"enabled"`
-// 		Email   string   `json:"email"`
-// 		Domains []string `json:"domains"`
-// 	}
-// 
-// 	if err := json.NewDecoder(r.Body).Decode(&acmeData); err != nil {
-// 		http.Error(w, err.Error(), http.StatusBadRequest)
-// 		return
-// 	}
-// 
-// 	if acmeData.Enabled && (acmeData.Email == "" || len(acmeData.Domains) == 0) {
-// 		http.Error(w, "Email and domains are required to enable ACME", http.StatusBadRequest)
-// 		return
-// 	}
-// 
-// 	if err := h.App.UpdateACMESettings(acmeData.Enabled, acmeData.Email, acmeData.Domains); err != nil {
-// 		http.Error(w, "Failed to update ACME settings", http.StatusInternalServerError)
-// 		return
-// 	}
-// 
-// 	w.Header().Set("Content-Type", "application/json")
-// 	json.NewEncoder(w).Encode(map[string]string{"message": "ACME settings updated successfully. Restart the application to apply changes."})
-// }
-
-// HandleRenewACME handles the POST /api/acme/renew endpoint
-// func (h *Handler) HandleRenewACME(w http.ResponseWriter, r *http.Request) {
-// 	if err := h.App.RenewACME(); err != nil {
-// 		http.Error(w, err.Error(), http.StatusInternalServerError)
-// 		return
-// 	}
-// 	w.Header().Set("Content-Type", "application/json")
-// 	json.NewEncoder(w).Encode(map[string]string{"message": "ACME certificate renewal initiated."})
-// }
-
-// ServeStatic serves static files
-func ServeStatic(fs http.FileSystem) http.Handler {
-	return http.FileServer(fs)
-}
-
-func validateHost(host string) bool {
-	if host == "" {
-		return false
-	}
-	if net.ParseIP(host) != nil {
-		return true
-	}
-	if host == "localhost" || host == "0.0.0.0" || host == "::" {
-		return true
-	}
-	if len(host) > 0 && len(host) <= 253 {
-		for _, part := range strings.Split(host, ".") {
-			if len(part) == 0 || len(part) > 63 {
-				return false
-			}
-		}
-		return true
-	}
-	return false
 }

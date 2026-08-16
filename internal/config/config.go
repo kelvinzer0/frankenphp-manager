@@ -9,43 +9,62 @@ import (
 
 // Config struct holds all configuration for our application
 type Config struct {
-	Server ServerConfig `yaml:"server"`
-	Auth   Auth         `yaml:"auth"`
-	ServersConfigPath string `yaml:"servers_config_path"`
-	
+	Server           ServerConfig `yaml:"server"`
+	Auth             Auth         `yaml:"auth"`
+	ServersConfigPath string      `yaml:"servers_config_path"`
 }
-
-// ACMEConfig struct holds ACME (Let's Encrypt) configuration
-
 
 // ServerConfig struct holds server configuration
 type ServerConfig struct {
-	Host string `yaml:"host"`
-	Port string `yaml:"port"`
+	Host     string `yaml:"host"`
+	HostIPv4 string `yaml:"host_ipv4"`
+	HostIPv6 string `yaml:"host_ipv6"`
+	Port     string `yaml:"port"`
+}
+
+// GetListenAddresses returns the listen addresses based on config.
+// If host_ipv4 and/or host_ipv6 are set, they take priority over host.
+// Returns one or two addresses for dual-stack binding.
+func (s *ServerConfig) GetListenAddresses() []string {
+	var addrs []string
+
+	if s.HostIPv4 != "" {
+		addrs = append(addrs, s.HostIPv4)
+	}
+	if s.HostIPv6 != "" {
+		addrs = append(addrs, s.HostIPv6)
+	}
+
+	// Legacy single host field (fallback)
+	if len(addrs) == 0 && s.Host != "" {
+		addrs = append(addrs, s.Host)
+	}
+
+	// Default: dual-stack
+	if len(addrs) == 0 {
+		addrs = append(addrs, "[::]")
+	}
+
+	return addrs
 }
 
 // Auth struct holds authentication configuration
 type Auth struct {
-	Username string `yaml:"username"`
+	Username     string `yaml:"username"`
 	PasswordHash string `yaml:"password_hash"`
 }
 
 // NewConfig returns a new decoded Config struct
 func NewConfig(configPath string) (*Config, error) {
-	// Create a new Config struct
 	config := &Config{}
 
-	// Open config file
 	file, err := os.Open(configPath)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
-	// Init new YAML decode
 	d := yaml.NewDecoder(file)
-
-	// Start YAML decoding from file
 	if err := d.Decode(&config); err != nil {
 		return nil, err
 	}
@@ -65,4 +84,3 @@ func ValidateConfigPath(path string) error {
 	}
 	return nil
 }
-

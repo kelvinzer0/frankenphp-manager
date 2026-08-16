@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,10 +18,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v2"
 
-	"phpservermanager/internal/app"
-	"phpservermanager/internal/config"
-	"phpservermanager/internal/handler"
-	"phpservermanager/internal/middleware"
+	"frankenphp-manager/internal/app"
+	"frankenphp-manager/internal/config"
+	"frankenphp-manager/internal/handler"
+	"frankenphp-manager/internal/middleware"
+	"frankenphp-manager/internal/server"
 )
 
 //go:embed web/static
@@ -32,7 +34,7 @@ func main() {
 
 	// Ensure the config directory exists
 	if _, err := os.Stat(configDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(configDir, 0755); err != nil {
+		if err := os.MkdirAll(configDir, 0700); err != nil {
 			log.Fatalf("Failed to create config directory: %v", err)
 		}
 	}
@@ -43,7 +45,7 @@ func main() {
 		if err := setupConfig(configPath); err != nil {
 			log.Fatalf("Failed to complete setup: %v", err)
 		}
-		fmt.Println("Setup complete. Starting PHP Server Manager...")
+		fmt.Println("Setup complete. Starting frankenphp-manager...")
 	}
 
 	// Load configuration
@@ -53,7 +55,7 @@ func main() {
 	}
 
 	// Initialize the App
-	application := app.NewApp(cfg)
+	application := app.NewApp(cfg, configPath)
 	application.Startup(context.Background())
 	defer application.Shutdown(context.Background())
 
@@ -63,12 +65,14 @@ func main() {
 	// Create router
 	r := mux.NewRouter()
 
-	// Create a new auth middleware
+	// Create middleware stack
 	authMiddleware := middleware.Auth(cfg.Auth)
+	rateLimitMiddleware := middleware.RateLimit(application.RateLimiter())
 
 	// API endpoints
 	api := r.PathPrefix("/api").Subrouter()
-	api.Use(CORSMiddleware)
+	api.Use(middleware.CORSMiddleware)
+	api.Use(rateLimitMiddleware)
 	api.Use(authMiddleware)
 	api.HandleFunc("/servers", h.HandleGetServers).Methods("GET")
 	api.HandleFunc("/servers", h.HandleCreateServer).Methods("POST")
@@ -80,9 +84,6 @@ func main() {
 	api.HandleFunc("/settings", h.HandleGetServerSettings).Methods("GET")
 	api.HandleFunc("/settings", h.HandleUpdateServerSettings).Methods("PUT")
 	api.HandleFunc("/auth", h.HandleUpdateAuth).Methods("PUT")
-	// api.HandleFunc("/acme/status", h.HandleGetACMEStatus).Methods("GET")
-	// api.HandleFunc("/acme/settings", h.HandleUpdateACMESettings).Methods("PUT")
-	// api.HandleFunc("/acme/renew", h.HandleRenewACME).Methods("POST")
 
 	// Static files
 	staticContent, err := fs.Sub(staticFS, "web/static")
@@ -91,20 +92,39 @@ func main() {
 	}
 	r.PathPrefix("/").Handler(http.FileServer(http.FS(staticContent)))
 
-	// Start web server
-	bindAddr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
-	fmt.Printf("PHP Server Manager is running at http://%s\n", bindAddr)
-	log.Fatal(http.ListenAndServe(bindAddr, r))
+	// Start listeners (dual-stack support)
+	addresses := cfg.Server.GetListenAddresses()
+	fmt.Printf("frankenphp-manager starting...\n")
+
+	// Start one listener per address
+	errCh := make(chan error, len(addresses))
+	for _, addr := range addresses {
+		addr = server.FormatHostForBinding(addr)
+		bindAddr := fmt.Sprintf("%s:%s", addr, cfg.Server.Port)
+
+		go func(bindAddr string) {
+			listener, err := net.Listen("tcp", bindAddr)
+			if err != nil {
+				errCh <- fmt.Errorf("failed to bind %s: %w", bindAddr, err)
+				return
+			}
+			fmt.Printf("  ✓ Listening on %s\n", bindAddr)
+			errCh <- http.Serve(listener, r)
+		}(bindAddr)
+	}
+
+	// Wait for first error
+	log.Fatal(<-errCh)
 }
 
 func getConfigDir() string {
 	switch runtime.GOOS {
 	case "darwin":
-		return filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "phpservermanager")
+		return filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "frankenphp-manager")
 	case "linux":
-		return filepath.Join("/etc", "phpservermanager")
+		return filepath.Join("/etc", "frankenphp-manager")
 	default:
-		return filepath.Join(".", "phpservermanager") // Fallback for unknown OS
+		return filepath.Join(".", "frankenphp-manager")
 	}
 }
 
@@ -137,11 +157,29 @@ func setupConfig(path string) error {
 		return fmt.Errorf("username and password cannot be empty")
 	}
 
-	fmt.Printf("Enter server host (default: 0.0.0.0): ")
+	if len(password) < 8 {
+		return fmt.Errorf("password must be at least 8 characters")
+	}
+
+	fmt.Println("")
+	fmt.Println("Network binding options:")
+	fmt.Println("  [::]      — Dual-stack: IPv4 + IPv6 (recommended)")
+	fmt.Println("  0.0.0.0   — IPv4 only")
+	fmt.Println("  Specific  — e.g., 127.0.0.1, ::1, 192.168.1.100")
+	fmt.Println("")
+	fmt.Println("For explicit dual-stack with separate addresses,")
+	fmt.Println("edit config.yaml after setup: host_ipv4 + host_ipv6")
+	fmt.Println("")
+
+	fmt.Printf("Enter server host (default: [::] for dual-stack): ")
 	host, _ := reader.ReadString('\n')
 	host = strings.TrimSpace(host)
 	if host == "" {
-		host = "0.0.0.0"
+		host = "[::]"
+	}
+	// Validate host format
+	if _, err := server.SanitizeHost(host); err != nil {
+		return fmt.Errorf("invalid host: %w", err)
 	}
 
 	fmt.Printf("Enter server port (default: 8080): ")
@@ -151,11 +189,12 @@ func setupConfig(path string) error {
 		port = "8080"
 	}
 
-	fmt.Printf("Enter path for servers data (default: %s/servers.json): ", getConfigDir())
+	configDir := filepath.Dir(path)
+	fmt.Printf("Enter path for servers data (default: %s/servers.json): ", configDir)
 	serversConfigPath, _ := reader.ReadString('\n')
 	serversConfigPath = strings.TrimSpace(serversConfigPath)
 	if serversConfigPath == "" {
-		serversConfigPath = filepath.Join(getConfigDir(), "servers.json")
+		serversConfigPath = filepath.Join(configDir, "servers.json")
 	}
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -169,7 +208,7 @@ func setupConfig(path string) error {
 			Port: port,
 		},
 		Auth: config.Auth{
-			Username: username,
+			Username:     username,
 			PasswordHash: string(hashedPassword),
 		},
 		ServersConfigPath: serversConfigPath,
@@ -180,25 +219,9 @@ func setupConfig(path string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
 	return nil
-}
-
-// CORSMiddleware adds CORS headers to the response
-func CORSMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
 }

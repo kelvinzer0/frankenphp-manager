@@ -1,1 +1,36 @@
-.php-server-manager/certs/
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+main
+phpservermanager
+frankenphp-manager
+
+# Config (contains credentials)
+internal/config/config.yaml
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go workspace
+go.work
+go.work.sum
+
+# Vendor (if using)
+# vendor/

@@ -1,114 +1,163 @@
-# PHP Server Manager
+# FrankenPHP Manager
 
-PHP Server Manager is a simple web-based tool to manage your PHP development servers. It allows you to start, stop, and configure multiple PHP servers running on different hosts, ports, and directories.
+A web-based tool to manage your FrankenPHP development servers. Start, stop, and configure multiple PHP servers from a clean web interface.
 
 ## Features
 
--   Manage multiple PHP development servers.
--   Start and stop servers with a single click.
--   Configure server details including name, host, port, document root, and custom commands.
--   Cross-platform compatibility (Linux, Windows, macOS).
--   Modern and responsive UI built with Vue 3 and Tailwind CSS.
+- 🖥️ Manage multiple PHP development servers from one dashboard
+- ▶️ Start/stop servers with one click
+- ⚙️ Configure host, port, document root, and custom commands
+- 🔒 Password-protected web UI (Basic Auth)
+- 🌐 IPv4, IPv6, and domain name support
+- 🔐 ACME/Let's Encrypt integration (optional)
+- 🛡️ Input sanitization & rate limiting
+- 📦 Single binary, easy to install
 
-## Technologies Used
+## Requirements
 
--   **Backend:** Go
--   **Frontend:** Vue 3, Vite, Tailwind CSS
--   **PHP Server:** FrankenPHP (required)
+- **Go 1.23+** (for building from source)
+- **FrankenPHP** installed and in your PATH — [Install FrankenPHP](https://frankenphp.dev/docs/install/)
 
-## Prerequisites
-
-To run PHP Server Manager, you need to have **FrankenPHP** installed and accessible in your system's PATH. FrankenPHP is the underlying PHP server that PHP Server Manager controls.
-
-### Installing FrankenPHP
-
-You can find the official FrankenPHP installation instructions at [https://frankenphp.dev/docs/install/](https://frankenphp.dev/docs/install/).
-
-**Quick Install Example (Linux/macOS):**
+## Quick Install (Linux)
 
 ```bash
-curl -L https://frankenphp.dev/install.sh | sh
-sudo mv frankenphp /usr/local/bin/
+git clone https://github.com/kelvinzer0/frankenphp-manager.git
+cd frankenphp-manager
+sudo bash scripts/install.sh
 ```
 
-Ensure that the `frankenphp` command is executable from your terminal after installation.
+This will:
+1. Build the binary
+2. Install to `/usr/local/bin/`
+3. Create config at `/etc/frankenphp-manager/`
+4. Set up a systemd service
 
-## Getting Started
-
-### 1. Clone the Repository
+Then run it once to set up your username and password:
 
 ```bash
-git clone https://github.com/your-username/phpservermanager.git # Replace with your repo URL
-cd phpservermanager
+sudo frankenphp-manager
 ```
 
-### 2. Frontend Development Setup
+## Service Management
 
-Navigate to the `frontend` directory, install dependencies, and start the development server.
+After installation, manage the service easily:
 
 ```bash
-cd frontend
-npm install
-npm run dev
+# Using systemctl
+sudo systemctl start frankenphp-manager
+sudo systemctl stop frankenphp-manager
+sudo systemctl status frankenphp-manager
+sudo systemctl restart frankenphp-manager
+
+# Or using the service wrapper
+sudo service frankenphp-manager start
+sudo service frankenphp-manager stop
+sudo service frankenphp-manager restart
+sudo service frankenphp-manager status
+sudo service frankenphp-manager logs      # Follow logs
+sudo service frankenphp-manager config    # Edit config
 ```
 
-This will start the frontend development server, usually on `http://localhost:5173`.
-
-### 3. Backend Development Setup
-
-Open a new terminal, navigate to the project root, and run the Go backend.
+## Uninstall
 
 ```bash
-go run cmd/server/main.go
+sudo bash scripts/uninstall.sh
 ```
 
-This will start the Go backend server, usually on `http://localhost:8080`.
+## Configuration
 
-### 4. Access the Application
+Config file: `/etc/frankenphp-manager/config.yaml`
 
-Open your web browser and go to `http://localhost:5173` (or the address where your Vite development server is running). The frontend will proxy API requests to the Go backend.
+```yaml
+server:
+  # Option 1: Explicit dual-stack (recommended)
+  host_ipv4: "0.0.0.0"    # Bind IPv4 on all interfaces
+  host_ipv6: "[::]"       # Bind IPv6 on all interfaces
+  port: "8080"
 
-## Building for Production
+  # Option 2: Single address (legacy)
+  # host: "[::]"          # [::] = dual-stack, 0.0.0.0 = IPv4 only
+auth:
+  username: admin
+  password_hash: "$2a$10$..."  # bcrypt hash
+servers_config_path: /etc/frankenphp-manager/servers.json
+```
 
-To build the frontend for production, navigate to the `frontend` directory and run:
+## API Endpoints
+
+All endpoints require Basic Auth.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/servers` | List all servers |
+| POST | `/api/servers` | Create a server |
+| PUT | `/api/servers/{id}` | Update a server |
+| DELETE | `/api/servers/{id}` | Delete a server |
+| POST | `/api/servers/{id}/start` | Start a server |
+| POST | `/api/servers/{id}/stop` | Stop a server |
+| GET | `/api/servers/{id}/status` | Get server status |
+| GET | `/api/settings` | Get management settings |
+| PUT | `/api/settings` | Update management settings |
+| PUT | `/api/auth` | Update credentials |
+
+## Network Binding (IPv4 / IPv6 / Dual-Stack)
+
+Two modes of operation:
+
+### Mode 1: Explicit Dual-Stack (Recommended)
+
+Set both `host_ipv4` and `host_ipv6` to bind **two separate listeners**:
+
+```yaml
+server:
+  host_ipv4: "0.0.0.0"   # Listener 1: all IPv4 interfaces
+  host_ipv6: "[::]"      # Listener 2: all IPv6 interfaces
+  port: "8080"
+```
+
+This creates **two independent listeners**, one for each protocol. Works regardless of OS `bindv6only` setting.
+
+### Mode 2: Single Address (Legacy)
+
+Use `host` for a single listener:
+
+```yaml
+server:
+  host: "[::]"    # Dual-stack via OS kernel (depends on net.ipv6.bindv6only)
+  port: "8080"
+```
+
+| Host Value | Behavior |
+|------------|----------|
+| `[::]` | Dual-stack (OS-dependent) |
+| `0.0.0.0` | IPv4 only |
+| `::1` / `127.0.0.1` | Loopback only |
+
+**Priority:** If `host_ipv4` or `host_ipv6` is set, they take priority over `host`.
+
+## Custom Command Placeholders
+
+When using custom commands, these placeholders are replaced:
+
+| Placeholder | Value |
+|-------------|-------|
+| `{host}` | Server host |
+| `{port}` | Server port |
+| `{directory}` | Document root |
+| `{listen_addr}` | Full listen address (host:port) |
+
+## Building from Source
 
 ```bash
-cd frontend
-npm run build
+go build -o frankenphp-manager cmd/server/main.go
 ```
 
-This will create an optimized `dist` directory inside `frontend/`.
+## Tech Stack
 
-The Go backend is configured to embed and serve these static files when built. To build the Go binary:
-
-```bash
-go build -o phpservermanager cmd/server/main.go
-```
-
-## Installation (Linux with systemd)
-
-For Linux systems, you can use the provided `install.sh` script to install `phpservermanager` to `/usr/local/bin` and register it as a `systemd` service.
-
-```bash
-chmod +x install.sh
-sudo ./install.sh
-```
-
-To uninstall:
-
-```bash
-chmod +x uninstall.sh
-sudo ./uninstall.sh
-```
-
-## Configuration Files
-
-Configuration files (`config.yaml` and `servers.json`) are stored in a platform-specific directory:
-
--   **Linux:** `/etc/phpservermanager/`
--   **macOS:** `~/Library/Application Support/phpservermanager/`
--   **Windows:** `%APPDATA%\phpservermanager\`
+- **Backend:** Go (gorilla/mux, certmagic)
+- **Frontend:** Vanilla HTML/CSS/JS (embedded)
+- **Server:** FrankenPHP
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License — see [LICENSE](LICENSE)

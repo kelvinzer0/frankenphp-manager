@@ -1,4 +1,4 @@
-module phpservermanager
+module frankenphp-manager
 
 go 1.23.0
 
@@ -8,6 +8,7 @@ require (
 	github.com/caddyserver/certmagic v0.23.0
 	github.com/gorilla/mux v1.8.0
 	golang.org/x/crypto v0.39.0
+	golang.org/x/time v0.9.0
 	gopkg.in/yaml.v2 v2.4.0
 )
 

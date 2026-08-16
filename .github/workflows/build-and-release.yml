@@ -13,10 +13,6 @@ jobs:
       matrix:
         goos: [linux, darwin]
         goarch: [amd64, arm64]
-        exclude:
-          # Exclude unsupported combinations
-          - goos: darwin
-            goarch: amd64 # For Apple Silicon, arm64 is preferred
 
     runs-on: ubuntu-latest
     env:
@@ -28,7 +24,6 @@ jobs:
       - name: Get version
         id: get_version
         run: |
-          # Extract version from tag, e.g., v1.0.0 -> 1.0.0
           VERSION=${GITHUB_REF#refs/tags/}
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "Detected version: $VERSION"
@@ -39,72 +34,49 @@ jobs:
       - name: Setup Go environment
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22' # Use the latest stable Go version
+          go-version: '1.23'
           check-latest: true
 
       - name: Generate Output Names
         run: |
-          BINARY_NAME="phpservermanager_${{ matrix.goos }}_${{ matrix.goarch }}"
-          PACKAGE_DIR_NAME="phpservermanager_${{ matrix.goos }}_${{ matrix.goarch }}_package"
-          ARCHIVE_NAME="phpservermanager_${{ matrix.goos }}_${{ matrix.goarch }}"
+          BINARY_NAME="frankenphp-manager_${{ matrix.goos }}_${{ matrix.goarch }}"
+          PACKAGE_DIR_NAME="frankenphp-manager_${{ matrix.goos }}_${{ matrix.goarch }}"
+          ARCHIVE_NAME="frankenphp-manager_${{ matrix.goos }}_${{ matrix.goarch }}"
           
           echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_ENV
           echo "PACKAGE_DIR_NAME=$PACKAGE_DIR_NAME" >> $GITHUB_ENV
           echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> $GITHUB_ENV
-          echo "Generated BINARY_NAME: $BINARY_NAME"
-          echo "Generated PACKAGE_DIR_NAME: $PACKAGE_DIR_NAME"
-          echo "Generated ARCHIVE_NAME: $ARCHIVE_NAME"
 
       - name: Backend Build
         run: |
-          echo "Building backend..."
-          cd cmd/server
-          go build -ldflags "-s -w -X 'main.version=${{ env.VERSION }}' -X 'main.goVersion=$(go version)' -X 'main.gitHash=$(git rev-parse HEAD)' -X 'main.buildTime=$(date -u +'%Y-%m-%dT%H:%M:%SZ')'" -o ../../${{ env.BINARY_NAME }} main.go
-          echo "Listing files in workspace root after backend build:"
-          ls -alh ../../
+          go build -ldflags "-s -w -X 'main.version=${{ env.VERSION }}' -X 'main.goVersion=$(go version)' -X 'main.gitHash=$(git rev-parse HEAD)' -X 'main.buildTime=$(date -u +'%Y-%m-%dT%H:%M:%SZ')'" -o ${{ env.BINARY_NAME }} cmd/server/main.go
 
       - name: Create Archive
         run: |
-          echo "Creating archive..."
-          cd ${{ github.workspace }}
-          
-          # Clean up previous package directory if it exists
           rm -rf ${{ env.PACKAGE_DIR_NAME }}
-          # Create a temporary directory for the release package
           mkdir -p ${{ env.PACKAGE_DIR_NAME }}
           
-          # Copy the binary into the package directory
-          cp ${{ env.BINARY_NAME }} ${{ env.PACKAGE_DIR_NAME }}/
-          
-          # Copy other necessary files into the package directory
-          cp install.sh ${{ env.PACKAGE_DIR_NAME }}/
-          cp uninstall.sh ${{ env.PACKAGE_DIR_NAME }}/
-          cp phpservermanager.service ${{ env.PACKAGE_DIR_NAME }}/
+          cp ${{ env.BINARY_NAME }} ${{ env.PACKAGE_DIR_NAME }}/frankenphp-manager
+          cp scripts/install.sh ${{ env.PACKAGE_DIR_NAME }}/
+          cp scripts/uninstall.sh ${{ env.PACKAGE_DIR_NAME }}/
+          cp scripts/frankenphp-manager-service.sh ${{ env.PACKAGE_DIR_NAME }}/
           cp README.md ${{ env.PACKAGE_DIR_NAME }}/
           cp LICENSE ${{ env.PACKAGE_DIR_NAME }}/
           
-          echo "Contents of the package directory:"
-          ls -l ${{ env.PACKAGE_DIR_NAME }}/
-
-          # Archive the package directory
           tar -czvf ${{ env.ARCHIVE_NAME }}.tar.gz ${{ env.PACKAGE_DIR_NAME }}/
-          echo "Listing files in workspace root after archiving:"
-          ls -l ${{ env.ARCHIVE_NAME }}.* || echo "Error: Archive files not found!"
 
       - name: Upload files to Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARCHIVE_NAME }}
-          path: | 
-            ${{ env.ARCHIVE_NAME }}.tar.gz
-          if-no-files-found: ignore # Don't fail if one archive type is not created
+          path: ${{ env.ARCHIVE_NAME }}.tar.gz
+          if-no-files-found: ignore
 
       - name: Upload binaries to release
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: |
-            ./${{ env.ARCHIVE_NAME }}.tar.gz
+          file: ./${{ env.ARCHIVE_NAME }}.tar.gz
           tag: ${{ github.ref }}
           overwrite: true
           file_glob: true
