@@ -29,10 +29,10 @@ jobs:
           echo "Detected version: $VERSION"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Go environment
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.23'
           check-latest: true
@@ -66,7 +66,7 @@ jobs:
           tar -czvf ${{ env.ARCHIVE_NAME }}.tar.gz ${{ env.PACKAGE_DIR_NAME }}/
 
       - name: Upload files to Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ env.ARCHIVE_NAME }}
           path: ${{ env.ARCHIVE_NAME }}.tar.gz
