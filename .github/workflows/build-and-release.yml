@@ -37,46 +37,44 @@ jobs:
           go-version: '1.23'
           check-latest: true
 
-      - name: Generate Output Names
+      - name: Build
         run: |
-          BINARY_NAME="frankenphp-manager_${{ matrix.goos }}_${{ matrix.goarch }}"
-          PACKAGE_DIR_NAME="frankenphp-manager_${{ matrix.goos }}_${{ matrix.goarch }}"
-          ARCHIVE_NAME="frankenphp-manager_${{ matrix.goos }}_${{ matrix.goarch }}"
+          BINARY="frankenphp-manager"
+          ARCHIVE="frankenphp-manager_${{ matrix.goos }}_${{ matrix.goarch }}"
           
-          echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_ENV
-          echo "PACKAGE_DIR_NAME=$PACKAGE_DIR_NAME" >> $GITHUB_ENV
-          echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> $GITHUB_ENV
-
-      - name: Backend Build
-        run: |
-          go build -ldflags "-s -w -X 'main.version=${{ env.VERSION }}' -X 'main.goVersion=$(go version)' -X 'main.gitHash=$(git rev-parse HEAD)' -X 'main.buildTime=$(date -u +'%Y-%m-%dT%H:%M:%SZ')'" -o ${{ env.BINARY_NAME }} cmd/server/main.go
-
-      - name: Create Archive
-        run: |
-          rm -rf ${{ env.PACKAGE_DIR_NAME }}
-          mkdir -p ${{ env.PACKAGE_DIR_NAME }}
+          go build -ldflags "-s -w -X 'main.version=${{ env.VERSION }}' -X 'main.goVersion=$(go version)' -X 'main.gitHash=$(git rev-parse HEAD)' -X 'main.buildTime=$(date -u +'%Y-%m-%dT%H:%M:%SZ')'" \
+            -o "${BINARY}" cmd/server/main.go
           
-          cp ${{ env.BINARY_NAME }} ${{ env.PACKAGE_DIR_NAME }}/frankenphp-manager
-          cp scripts/install.sh ${{ env.PACKAGE_DIR_NAME }}/
-          cp scripts/uninstall.sh ${{ env.PACKAGE_DIR_NAME }}/
-          cp scripts/frankenphp-manager-service.sh ${{ env.PACKAGE_DIR_NAME }}/
-          cp README.md ${{ env.PACKAGE_DIR_NAME }}/
-          cp LICENSE ${{ env.PACKAGE_DIR_NAME }}/
+          # Create package directory
+          PKG_DIR="${ARCHIVE}_pkg"
+          rm -rf "${PKG_DIR}"
+          mkdir -p "${PKG_DIR}"
           
-          tar -czvf ${{ env.ARCHIVE_NAME }}.tar.gz ${{ env.PACKAGE_DIR_NAME }}/
+          # Copy files into package
+          cp "${BINARY}" "${PKG_DIR}/frankenphp-manager"
+          cp scripts/install.sh "${PKG_DIR}/"
+          cp scripts/uninstall.sh "${PKG_DIR}/"
+          cp scripts/frankenphp-manager-service.sh "${PKG_DIR}/"
+          cp README.md "${PKG_DIR}/"
+          cp LICENSE "${PKG_DIR}/"
+          
+          # Create archive
+          tar -czvf "${ARCHIVE}.tar.gz" "${PKG_DIR}/"
+          
+          echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
 
       - name: Upload files to Artifacts
         uses: actions/upload-artifact@v5
         with:
-          name: ${{ env.ARCHIVE_NAME }}
-          path: ${{ env.ARCHIVE_NAME }}.tar.gz
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}.tar.gz
           if-no-files-found: ignore
 
       - name: Upload binaries to release
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ./${{ env.ARCHIVE_NAME }}.tar.gz
+          file: ./${{ env.ARCHIVE }}.tar.gz
           tag: ${{ github.ref }}
           overwrite: true
           file_glob: true
