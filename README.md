@@ -1,162 +1,189 @@
 # FrankenPHP Manager
 
-A web-based tool to manage your FrankenPHP development servers. Start, stop, and configure multiple PHP servers from a clean web interface.
-
-## Features
-
-- 🖥️ Manage multiple PHP development servers from one dashboard
-- ▶️ Start/stop servers with one click
-- ⚙️ Configure host, port, document root, and custom commands
-- 🔒 Password-protected web UI (Basic Auth)
-- 🌐 IPv4, IPv6, and domain name support
-- 🔐 ACME/Let's Encrypt integration (optional)
-- 🛡️ Input sanitization & rate limiting
-- 📦 Single binary, easy to install
+CLI tool to manage PHP development servers powered by **FrankenPHP**.  
+Auto-provisions MySQL, Redis, and multi-version PHP — all via Docker.
 
 ## Requirements
 
-- **Go 1.23+** (for building from source)
-- **FrankenPHP** installed and in your PATH — [Install FrankenPHP](https://frankenphp.dev/docs/install/)
+- **Docker** (running)
+- No Go needed for end users (install script provides pre-built binary)
 
-## Quick Install (Linux)
+## Quick Install
 
 ```bash
 git clone https://github.com/kelvinzer0/frankenphp-manager.git
 cd frankenphp-manager
-sudo bash scripts/install.sh
+bash scripts/install.sh
+```
+
+Or build from source:
+
+```bash
+go build -o frankenphp ./cmd/frankenphp/
+sudo mv frankenphp /usr/local/bin/
+```
+
+## First-Time Setup
+
+```bash
+frankenphp init
 ```
 
 This will:
-1. Build the binary
-2. Install to `/usr/local/bin/`
-3. Create config at `/etc/frankenphp-manager/`
-4. Set up a systemd service
+1. Check Docker is running
+2. Create a shared Docker network
+3. Start MySQL container (port 13306)
+4. Start Redis container (port 16379)
 
-Then run it once to set up your username and password:
+## Usage
 
-```bash
-sudo frankenphp-manager
-```
-
-## Service Management
-
-After installation, manage the service easily:
+### Add a project
 
 ```bash
-# Using systemctl
-sudo systemctl start frankenphp-manager
-sudo systemctl stop frankenphp-manager
-sudo systemctl status frankenphp-manager
-sudo systemctl restart frankenphp-manager
-
-# Or using the service wrapper
-sudo service frankenphp-manager start
-sudo service frankenphp-manager stop
-sudo service frankenphp-manager restart
-sudo service frankenphp-manager status
-sudo service frankenphp-manager logs      # Follow logs
-sudo service frankenphp-manager config    # Edit config
+frankenphp add /path/to/php/project
 ```
 
-## Uninstall
+Interactive wizard will ask:
+- Project name (auto-detected from directory)
+- PHP version (auto-detected from `composer.json`)
+- Port (auto-assigned from 8000+)
+- MySQL database (auto-created)
+- Redis (optional)
+
+### Manage projects
 
 ```bash
-sudo bash scripts/uninstall.sh
+frankenphp list                  # List all projects
+frankenphp start myapp           # Start a project
+frankenphp stop myapp            # Stop a project
+frankenphp restart myapp         # Restart a project
+frankenphp start all             # Start all projects
+frankenphp stop all              # Stop all projects
+frankenphp rm myapp              # Remove a project
 ```
 
-## Configuration
+### View logs
 
-Config file: `/etc/frankenphp-manager/config.yaml`
+```bash
+frankenphp log myapp             # View last 100 lines
+frankenphp log myapp -f          # Follow in real-time
+frankenphp log myapp -t 50       # Last 50 lines
+frankenphp log all -f            # All projects, real-time
+```
+
+### Switch PHP version
+
+```bash
+frankenphp use myapp 8.4         # Switch to PHP 8.4
+frankenphp use myapp 8.1         # Switch to PHP 8.1
+```
+
+Supported: `8.1`, `8.2`, `8.3`, `8.4`
+
+### Database management
+
+```bash
+frankenphp manage createdb myapp # Create project database
+frankenphp manage dropdb myapp   # Drop project database
+frankenphp manage listdb         # List all databases
+frankenphp manage query mydb "SELECT * FROM users"
+frankenphp manage mysql          # MySQL connection info
+frankenphp manage redis          # Redis connection info
+```
+
+### System status
+
+```bash
+frankenphp status                # Show Docker, MySQL, Redis, projects
+```
+
+### Destroy everything
+
+```bash
+frankenphp destroy               # Remove all containers, volumes, config
+frankenphp destroy -f            # Skip confirmation
+```
+
+## Architecture
+
+```
+Docker Network: frankenphp-net
+├── frankenphp-mysql     (shared MySQL 8.0, port 13306)
+├── frankenphp-redis     (shared Redis 7, port 16379)
+├── frankenphp-myapp     (PHP 8.3, port 8000)
+├── frankenphp-api       (PHP 8.4, port 8001)
+└── frankenphp-legacy    (PHP 8.1, port 8002)
+```
+
+Each project runs its own FrankenPHP container with the specified PHP version.  
+MySQL and Redis are shared across all projects.
+
+## Config
+
+Config file: `~/.frankenphp/config.yaml`
 
 ```yaml
-server:
-  # Option 1: Explicit dual-stack (recommended)
-  host_ipv4: "0.0.0.0"    # Bind IPv4 on all interfaces
-  host_ipv6: "[::]"       # Bind IPv6 on all interfaces
-  port: "8080"
-
-  # Option 2: Single address (legacy)
-  # host: "[::]"          # [::] = dual-stack, 0.0.0.0 = IPv4 only
-auth:
-  username: admin
-  password_hash: "$2a$10$..."  # bcrypt hash
-servers_config_path: /etc/frankenphp-manager/servers.json
+mysql_root_pass: "frankenphp"
+mysql_user: "frankenphp"
+mysql_pass: "frankenphp"
+mysql_port: "13306"
+redis_port: "16379"
+projects:
+  myapp:
+    name: myapp
+    directory: /home/user/projects/myapp
+    php_version: "8.3"
+    port: "8000"
+    db_name: myapp
+    use_redis: true
 ```
 
-## API Endpoints
+## Project Auto-Detection
 
-All endpoints require Basic Auth.
+When adding a project, the tool auto-detects:
+- **PHP version** from `composer.json`
+- **Framework** from project files (Laravel, Symfony, WordPress)
+- **Next available port** starting from 8000
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/servers` | List all servers |
-| POST | `/api/servers` | Create a server |
-| PUT | `/api/servers/{id}` | Update a server |
-| DELETE | `/api/servers/{id}` | Delete a server |
-| POST | `/api/servers/{id}/start` | Start a server |
-| POST | `/api/servers/{id}/stop` | Stop a server |
-| GET | `/api/servers/{id}/status` | Get server status |
-| GET | `/api/settings` | Get management settings |
-| PUT | `/api/settings` | Update management settings |
-| PUT | `/api/auth` | Update credentials |
+## HTTPS / ACME (Let's Encrypt)
 
-## Network Binding (IPv4 / IPv6 / Dual-Stack)
+Three HTTPS modes per project:
 
-Two modes of operation:
-
-### Mode 1: Explicit Dual-Stack (Recommended)
-
-Set both `host_ipv4` and `host_ipv6` to bind **two separate listeners**:
-
-```yaml
-server:
-  host_ipv4: "0.0.0.0"   # Listener 1: all IPv4 interfaces
-  host_ipv6: "[::]"      # Listener 2: all IPv6 interfaces
-  port: "8080"
-```
-
-This creates **two independent listeners**, one for each protocol. Works regardless of OS `bindv6only` setting.
-
-### Mode 2: Single Address (Legacy)
-
-Use `host` for a single listener:
-
-```yaml
-server:
-  host: "[::]"    # Dual-stack via OS kernel (depends on net.ipv6.bindv6only)
-  port: "8080"
-```
-
-| Host Value | Behavior |
-|------------|----------|
-| `[::]` | Dual-stack (OS-dependent) |
-| `0.0.0.0` | IPv4 only |
-| `::1` / `127.0.0.1` | Loopback only |
-
-**Priority:** If `host_ipv4` or `host_ipv6` is set, they take priority over `host`.
-
-## Custom Command Placeholders
-
-When using custom commands, these placeholders are replaced:
-
-| Placeholder | Value |
-|-------------|-------|
-| `{host}` | Server host |
-| `{port}` | Server port |
-| `{directory}` | Document root |
-| `{listen_addr}` | Full listen address (host:port) |
-
-## Building from Source
-
+### `http` — Local dev (default)
 ```bash
-go build -o frankenphp-manager cmd/server/main.go
+frankenphp add /path/to/project
+# Choose: HTTPS mode → http
+# Serves on http://localhost:8000
 ```
 
-## Tech Stack
+### `selfsigned` — Local HTTPS testing
+```bash
+frankenphp add /path/to/project
+# Choose: HTTPS mode → selfsigned
+# Serves on https://localhost:8000 (self-signed cert)
+# Browser will show warning — this is expected
+```
 
-- **Backend:** Go (gorilla/mux, certmagic)
-- **Frontend:** Vanilla HTML/CSS/JS (embedded)
-- **Server:** FrankenPHP
+### `acme` — Production (Let's Encrypt)
+```bash
+frankenphp add /path/to/project
+# Choose: HTTPS mode → acme
+# Enter domain: example.com
+# Enter email: admin@example.com
+# Serves on https://example.com (real cert, auto-renewed)
+```
+
+**Requirements for ACME:**
+- Domain must point to your server's public IP
+- Ports 80 and 443 must be accessible from the internet
+- Let's Encrypt will verify domain ownership via HTTP-01 challenge
+
+### Switch HTTPS mode later
+```bash
+frankenphp tls myapp selfsigned    # Switch to self-signed
+frankenphp tls myapp acme          # Switch to ACME
+frankenphp tls myapp http          # Back to HTTP only
+```
 
 ## License
 
